@@ -1,0 +1,14 @@
+{
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "demo": "node demo-login.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "fetch": "^1.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "node-fetch": "^3.3.2"
+  }
+}
