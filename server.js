@@ -273,6 +273,68 @@ app.get("/api/me/customer", requireAuth, async (req, res) => {
   }
 });
 
+// Protected: proxy POST to Masivo behavior/events
+app.post("/api/behavior/events", requireAuth, async (req, res) => {
+  try {
+    const { customer_id, event_type, amount, timestamp, brand_id, order: orderIn, purchase_id, payment_method } = req.body || {};
+    if (!customer_id) return res.status(400).json({ error: "customer_id is required" });
+    if (!event_type) return res.status(400).json({ error: "event_type is required" });
+    if (!brand_id) return res.status(400).json({ error: "brand_id is required" });
+
+    const PAYMENT_METHODS = ["CREDIT", "DEBIT", "CASH", "BANK_TRANSFER", "OTHER"];
+
+    // Masivo API expects "type" and "order" with purchase_id, value, products, payment_method.
+    let order = null;
+    if (orderIn != null && typeof orderIn === "object" && !Array.isArray(orderIn)) {
+      order = orderIn;
+    } else if (amount != null) {
+      const n = Number(amount);
+      if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: "amount must be a non‑negative number" });
+      const pm = payment_method != null && PAYMENT_METHODS.includes(String(payment_method).toUpperCase())
+        ? String(payment_method).toUpperCase() : "OTHER";
+      order = {
+        purchase_id: purchase_id != null ? String(purchase_id).trim() : `order-${Date.now()}`,
+        value: Math.floor(n),
+        products: [{ sku: "unknown", quantity: 1, amount: Math.floor(n), value: Math.floor(n) }],
+        payment_method: pm,
+      };
+      if (timestamp != null && String(timestamp).trim()) order.timestamp = String(timestamp).trim();
+    }
+    if (!order) return res.status(400).json({ error: "order (or amount) is required for behavior/events" });
+
+    const payload = {
+      customer_id: String(customer_id).trim(),
+      type: String(event_type).trim(),
+      brand_id: String(brand_id).trim(),
+      order,
+    };
+
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[behavior/events] outgoing payload:", JSON.stringify(payload));
+    }
+
+    const r = await masivoFetch("/behavior/events", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+
+    const { text, json } = await readResponseBody(r);
+
+    if (!r.ok) {
+      logMasivoError("POST /behavior/events", r.status, text);
+      return res.status(r.status).json({
+        error: "Masivo behavior/events failed",
+        details: json || text,
+      });
+    }
+
+    return res.status(200).json(json || { raw: text });
+  } catch (e) {
+    console.error("[SERVER ERROR] /api/behavior/events", e);
+    return res.status(500).json({ error: e?.message || "Internal error" });
+  }
+});
+
 // -------------------- Start --------------------
 assertEnv();
 

@@ -6,6 +6,7 @@ const fetchFn = globalThis.fetch ?? fetchPkg;
 const API_URL = process.env.API_URL || "http://localhost:3000";
 // acepta CUSTOMER_ID o customer_id
 const CUSTOMER_ID = process.env.CUSTOMER_ID || process.env.customer_id;
+const BRAND_ID = process.env.BRAND_ID || "0001";
 
 if (!CUSTOMER_ID) {
   console.error("Missing CUSTOMER_ID (or customer_id) in .env");
@@ -39,6 +40,7 @@ async function requestJson(method, path, body, headers = {}) {
 (async () => {
   console.log("API_URL:", API_URL);
   console.log("customer_id:", CUSTOMER_ID);
+  console.log("brand_id:", BRAND_ID);
 
   // 1) Request TOTP
   console.log("\n1) POST /auth/totp/request");
@@ -102,4 +104,28 @@ async function requestJson(method, path, body, headers = {}) {
   }
 
   console.log("Protected OK (/api/me/customer):\n", JSON.stringify(meCustomer.json, null, 2));
+
+  // 5) POST behavior/events (PURCHASE example)
+  console.log("\n5) POST /api/behavior/events (PURCHASE)");
+  const eventsPayload = {
+    customer_id: String(CUSTOMER_ID).trim(),
+    event_type: "PURCHASE",
+    brand_id: String(BRAND_ID).trim(),
+    order: {
+      purchase_id: `demo-${Date.now()}`,
+      value: 10,
+      products: [{ sku: "demo-product-1", quantity: 2, amount: 10, value: 10 }],
+      payment_method: "OTHER",
+    },
+  };
+  const events = await requestJson("POST", "/api/behavior/events", eventsPayload, {
+    Authorization: `Bearer ${appToken}`,
+  });
+
+  if (!events.ok) {
+    console.error("Behavior events failed:", events.status, events.json || events.text);
+    process.exit(1);
+  }
+
+  console.log("Behavior events OK:\n", JSON.stringify(events.json, null, 2));
 })();
