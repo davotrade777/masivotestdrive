@@ -18,12 +18,14 @@ A Node.js proxy server and demo client for integrating with the Masivo loyalty p
 - **Flexible order structure**: Support for products, shipping, and order-level data
 - **Automatic points calculation**: Masivo calculates points based on order value and campaign rules
 - **Payment method tracking**: Support for CREDIT, DEBIT, CASH, BANK_TRANSFER, and OTHER
+- **Note**: Points earned from purchases may take up to 3 minutes to appear in the Masivo dashboard
 
 ### 🎁 Rewards Redemption
 - **Redemption preview**: Validate and preview rewards redemptions before actual redemption
 - **Standalone redemption**: Direct point redemption via dedicated endpoint
 - **Purchase-integrated redemption**: Redeem rewards as part of purchase events
 - **Balance tracking**: Monitor points balance before and after redemption
+- **Note**: Points deducted from redemptions may take up to 3 minutes to appear in the Masivo dashboard
 
 ## Installation
 
@@ -403,6 +405,19 @@ In non-production environments (`NODE_ENV !== "production"`), the server logs:
 ### Masivo Token Caching
 
 The server caches Masivo access tokens for 30 seconds before expiration to reduce API calls.
+
+## Important Notes
+
+### Points Movement Delay
+
+**⚠️ Points movements (adding or subtracting) may take up to 3 minutes to appear in the Masivo dashboard.**
+
+This applies to:
+- Points earned from purchase events
+- Points deducted from reward redemptions
+- Any other points transactions
+
+The API calls will return successfully, but the balance updates in the Masivo dashboard may be delayed. When checking customer balance via the API or dashboard, allow up to 3 minutes for the changes to be reflected.
 
 ## License
 
