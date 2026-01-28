@@ -7,6 +7,7 @@ const API_URL = process.env.API_URL || "http://localhost:3000";
 // acepta CUSTOMER_ID o customer_id
 const CUSTOMER_ID = process.env.CUSTOMER_ID || process.env.customer_id;
 const BRAND_ID = process.env.BRAND_ID || "0001";
+const REWARD_ID = process.env.REWARD_ID || "67cd85fc-bbf7-4f58-a4e2-7ca6fc3e0438";
 
 if (!CUSTOMER_ID) {
   console.error("Missing CUSTOMER_ID (or customer_id) in .env");
@@ -41,6 +42,7 @@ async function requestJson(method, path, body, headers = {}) {
   console.log("API_URL:", API_URL);
   console.log("customer_id:", CUSTOMER_ID);
   console.log("brand_id:", BRAND_ID);
+  console.log("reward_id:", REWARD_ID);
 
   // 1) Request TOTP
   console.log("\n1) POST /auth/totp/request");
@@ -128,4 +130,127 @@ async function requestJson(method, path, body, headers = {}) {
   }
 
   console.log("Behavior events OK:\n", JSON.stringify(events.json, null, 2));
+
+  // 6a) Check customer balance BEFORE redemption
+  console.log("\n6a) GET /api/me/customer (check balance before redeem)");
+  const customerBefore = await requestJson("GET", "/api/me/customer", null, {
+    Authorization: `Bearer ${appToken}`,
+  });
+  if (customerBefore.ok && customerBefore.json?.data?.points) {
+    console.log("Points balance BEFORE redeem:", customerBefore.json.data.points);
+  }
+
+  // 6b) PUT rewards/redeem/preview (preview redemption before actual redeem)
+  console.log("\n6b) PUT /api/rewards/redeem/preview");
+  const previewOrder = {
+    order: {
+      products: [
+        {
+          sku: "demo-product-1",
+          amount: 10,
+          value: 10,
+          redeem: [
+            {
+              id: String(REWARD_ID).trim(), // Use "id" not "reward_id" in purchase events
+              amount: 6, // Points to redeem at product level
+            },
+          ],
+        },
+      ],
+      value: 10,
+    },
+  };
+  const preview = await requestJson("PUT", "/api/rewards/redeem/preview", previewOrder, {
+    Authorization: `Bearer ${appToken}`,
+  });
+
+  if (!preview.ok) {
+    console.error("Rewards redeem preview failed:", preview.status, preview.json || preview.text);
+    process.exit(1);
+  }
+
+  console.log("Rewards redeem preview OK:\n", JSON.stringify(preview.json, null, 2));
+
+  // 6c) POST rewards/redeem (actual redemption - standalone)
+  console.log("\n6c) POST /api/rewards/redeem (standalone)");
+  const redeemPayload = {
+    customer_id: String(CUSTOMER_ID).trim(),
+    reward_id: String(REWARD_ID).trim(),
+    amount: 100,
+  };
+  const redeem = await requestJson("POST", "/api/rewards/redeem", redeemPayload, {
+    Authorization: `Bearer ${appToken}`,
+  });
+
+  if (!redeem.ok) {
+    console.error("Rewards redeem failed:", redeem.status, redeem.json || redeem.text);
+    process.exit(1);
+  }
+
+  console.log("Rewards redeem OK:\n", JSON.stringify(redeem.json, null, 2));
+
+  // 6d) Check customer balance AFTER redemption
+  console.log("\n6d) GET /api/me/customer (check balance after redeem)");
+  const customerAfter = await requestJson("GET", "/api/me/customer", null, {
+    Authorization: `Bearer ${appToken}`,
+  });
+  if (customerAfter.ok && customerAfter.json?.data?.points) {
+    console.log("Points balance AFTER redeem:", customerAfter.json.data.points);
+    if (customerBefore.ok && customerBefore.json?.data?.points) {
+      const diff = customerBefore.json.data.points - customerAfter.json.data.points;
+      console.log("Points deducted:", diff);
+      if (diff === 0) {
+        console.warn("⚠️  WARNING: No points were deducted! Redemption may need to be part of a purchase event.");
+      }
+    }
+  }
+
+  // 6e) Alternative: Redeem as part of a purchase event
+  console.log("\n6e) POST /api/behavior/events (PURCHASE with redemption)");
+  const purchaseWithRedeem = {
+    customer_id: String(CUSTOMER_ID).trim(),
+    event_type: "PURCHASE",
+    brand_id: String(BRAND_ID).trim(),
+    order: {
+      purchase_id: `demo-redeem-${Date.now()}`,
+      value: 10,
+      products: [
+        {
+          sku: "demo-product-1",
+          quantity: 1,
+          amount: 10,
+          value: 10,
+          redeem: [
+            {
+              id: String(REWARD_ID).trim(), // Use "id" not "reward_id" in purchase events
+              amount: 6, // Points to redeem
+            },
+          ],
+        },
+      ],
+      payment_method: "OTHER",
+    },
+  };
+  const purchaseRedeem = await requestJson("POST", "/api/behavior/events", purchaseWithRedeem, {
+    Authorization: `Bearer ${appToken}`,
+  });
+
+  if (!purchaseRedeem.ok) {
+    console.error("Purchase with redeem failed:", purchaseRedeem.status, purchaseRedeem.json || purchaseRedeem.text);
+  } else {
+    console.log("Purchase with redeem OK:\n", JSON.stringify(purchaseRedeem.json, null, 2));
+    
+    // Check balance after purchase with redeem
+    console.log("\n6f) GET /api/me/customer (check balance after purchase+redeem)");
+    const customerAfterPurchase = await requestJson("GET", "/api/me/customer", null, {
+      Authorization: `Bearer ${appToken}`,
+    });
+    if (customerAfterPurchase.ok && customerAfterPurchase.json?.data?.points) {
+      console.log("Points balance AFTER purchase+redeem:", customerAfterPurchase.json.data.points);
+      if (customerAfter.ok && customerAfter.json?.data?.points) {
+        const diff = customerAfter.json.data.points - customerAfterPurchase.json.data.points;
+        console.log("Points deducted from purchase+redeem:", diff);
+      }
+    }
+  }
 })();

@@ -335,6 +335,139 @@ app.post("/api/behavior/events", requireAuth, async (req, res) => {
   }
 });
 
+// Protected: proxy PUT to Masivo redeem/preview (preview/validate redemptions)
+app.put("/api/rewards/redeem/preview", requireAuth, async (req, res) => {
+  try {
+    const { order } = req.body || {};
+    if (!order || typeof order !== "object") {
+      return res.status(400).json({ error: "order is required and must be an object" });
+    }
+
+    const redeemBaseUrl = process.env.MASIVO_REDEEM_BASE_URL || MASIVO_BASE_URL;
+    const endpointPath = "/redeem/preview";
+    const fullUrl = `${redeemBaseUrl}${endpointPath}`;
+
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[rewards/redeem/preview] outgoing order:", JSON.stringify(order, null, 2));
+      console.log("[rewards/redeem/preview] calling:", fullUrl);
+    }
+
+    let r;
+    if (redeemBaseUrl !== MASIVO_BASE_URL) {
+      const token = await getMasivoAccessToken();
+      r = await fetchFn(fullUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ order }),
+      });
+    } else {
+      r = await masivoFetch(endpointPath, {
+        method: "PUT",
+        body: JSON.stringify({ order }),
+      });
+    }
+
+    const { text, json } = await readResponseBody(r);
+
+    if (!r.ok) {
+      logMasivoError("PUT /redeem/preview", r.status, text);
+      return res.status(r.status).json({
+        error: "Masivo rewards/redeem preview failed",
+        details: json || text,
+      });
+    }
+
+    return res.status(200).json(json || { raw: text });
+  } catch (e) {
+    console.error("[SERVER ERROR] /api/rewards/redeem/preview", e);
+    return res.status(500).json({ error: e?.message || "Internal error" });
+  }
+});
+
+// Protected: proxy POST to Masivo customers/{customer_id}/redeem
+app.post("/api/rewards/redeem", requireAuth, async (req, res) => {
+  try {
+    const { customer_id, reward_id, amount } = req.body || {};
+    if (!customer_id) return res.status(400).json({ error: "customer_id is required" });
+    if (!reward_id) return res.status(400).json({ error: "reward_id is required" });
+    if (amount == null) return res.status(400).json({ error: "amount is required" });
+
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) {
+      return res.status(400).json({ error: "amount must be a positive number" });
+    }
+
+    // Masivo API: customer_id goes in URL path, not body
+    const customerIdStr = String(customer_id).trim();
+    const payload = {
+      reward_id: String(reward_id).trim(),
+      amount: Math.floor(n),
+    };
+
+    // Masivo API endpoint: /customers/{customer_id}/redeem
+    // If MASIVO_REDEEM_BASE_URL is set, use it; otherwise use MASIVO_BASE_URL
+    // This allows redeem to use a different base URL if needed
+    const redeemBaseUrl = process.env.MASIVO_REDEEM_BASE_URL || MASIVO_BASE_URL;
+    const endpointPath = process.env.MASIVO_REDEEM_PATH || `/customers/${encodeURIComponent(customerIdStr)}/redeem`;
+    const fullUrl = `${redeemBaseUrl}${endpointPath}`;
+
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[rewards/redeem] outgoing payload:", JSON.stringify(payload));
+      console.log("[rewards/redeem] calling:", fullUrl);
+    }
+
+    // If using a different base URL, fetch directly instead of masivoFetch
+    // Otherwise use masivoFetch which uses MASIVO_BASE_URL
+    let r;
+    if (redeemBaseUrl !== MASIVO_BASE_URL) {
+      const token = await getMasivoAccessToken();
+      r = await fetchFn(fullUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      r = await masivoFetch(endpointPath, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    }
+
+    const { text, json } = await readResponseBody(r);
+
+    if (!r.ok) {
+      logMasivoError(`POST /customers/${customerIdStr}/redeem`, r.status, text);
+      
+      // 404 suggests endpoint doesn't exist - might not be in storefront API
+      if (r.status === 404) {
+        return res.status(404).json({
+          error: "Masivo rewards/redeem endpoint not found (404)",
+          message: "The /customers/{id}/redeem endpoint may not be available in the storefront API, or may require a different base URL/path.",
+          attempted_url: fullUrl,
+          suggestion: "Check Masivo API documentation for the correct redeem endpoint path, or verify if this endpoint requires a different API version or authentication.",
+          details: text && text.length < 500 ? text : (json || "HTML error page returned"),
+        });
+      }
+      
+      return res.status(r.status).json({
+        error: "Masivo rewards/redeem failed",
+        details: json || text,
+      });
+    }
+
+    return res.status(200).json(json || { raw: text });
+  } catch (e) {
+    console.error("[SERVER ERROR] /api/rewards/redeem", e);
+    return res.status(500).json({ error: e?.message || "Internal error" });
+  }
+});
+
 // -------------------- Start --------------------
 assertEnv();
 
