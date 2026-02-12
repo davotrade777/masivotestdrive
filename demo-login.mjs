@@ -115,8 +115,8 @@ async function requestJson(method, path, body, headers = {}) {
     brand_id: String(BRAND_ID).trim(),
     order: {
       purchase_id: `demo-${Date.now()}`,
-      value: 10,
-      products: [{ sku: "demo-product-1", quantity: 2, amount: 10, value: 10 }],
+      value: 1000,
+      products: [{ sku: "demo-product-1", quantity: 2, amount: 1000, value: 1000 }],
       payment_method: "OTHER",
     },
   };
