@@ -1,0 +1,138 @@
+import "dotenv/config";
+import fetchPkg from "node-fetch";
+
+const fetchFn = globalThis.fetch ?? fetchPkg;
+
+const API_URL = process.env.API_URL || "http://localhost:3000";
+const CUSTOMER_ID = process.env.CUSTOMER_ID || process.env.customer_id;
+const BRAND_ID = process.env.BRAND_ID || "0001";
+const PURCHASE_AMOUNT = Number(process.env.PURCHASE_AMOUNT) || 1000;
+
+if (!CUSTOMER_ID) {
+  console.error("Missing CUSTOMER_ID (or customer_id) in .env");
+  process.exit(1);
+}
+
+async function readStdinLine(prompt) {
+  process.stdout.write(prompt);
+  return new Promise((resolve) => {
+    process.stdin.setEncoding("utf8");
+    process.stdin.once("data", (data) => resolve(String(data).trim()));
+  });
+}
+
+async function requestJson(method, path, body, headers = {}) {
+  const r = await fetchFn(`${API_URL}${path}`, {
+    method,
+    headers: {
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...headers,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await r.text().catch(() => "");
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch {}
+  return { ok: r.ok, status: r.status, json, text };
+}
+
+(async () => {
+  console.log("API_URL:", API_URL);
+  console.log("customer_id:", CUSTOMER_ID);
+  console.log("brand_id:", BRAND_ID);
+  console.log("purchase amount ($):", PURCHASE_AMOUNT);
+
+  // 1) Request TOTP
+  console.log("\n1) POST /auth/totp/request");
+  const totpReq = await requestJson("POST", "/auth/totp/request", {
+    customer_id: String(CUSTOMER_ID),
+    metadata: {},
+  });
+  if (!totpReq.ok) {
+    console.error("TOTP request failed:", totpReq.status, totpReq.json || totpReq.text);
+    process.exit(1);
+  }
+  console.log("TOTP request OK:", totpReq.json);
+
+  let code = totpReq.json?.data?.code;
+  if (!code) code = await readStdinLine("Enter TOTP code: ");
+
+  // 2) Verify => app token
+  console.log("\n2) POST /auth/totp/verify");
+  const verify = await requestJson("POST", "/auth/totp/verify", {
+    customer_id: String(CUSTOMER_ID),
+    code: String(code),
+  });
+  if (!verify.ok) {
+    console.error("TOTP verify failed:", verify.status, verify.json || verify.text);
+    process.exit(1);
+  }
+  const appToken = verify.json?.token;
+  if (!appToken) {
+    console.error("Verify OK but no token:", verify.json);
+    process.exit(1);
+  }
+  console.log("Verify OK. App JWT (first 20):", appToken.slice(0, 20) + "...");
+
+  // 3) GET /api/me
+  console.log("\n3) GET /api/me (protected)");
+  const me = await requestJson("GET", "/api/me", null, {
+    Authorization: `Bearer ${appToken}`,
+  });
+  if (!me.ok) {
+    console.error("Protected call /api/me failed:", me.status, me.json || me.text);
+    process.exit(1);
+  }
+  console.log("Protected OK (/api/me):\n", JSON.stringify(me.json, null, 2));
+
+  // 4) GET /api/me/customer (balance before)
+  console.log("\n4) GET /api/me/customer (balance before purchase)");
+  const customerBefore = await requestJson("GET", "/api/me/customer", null, {
+    Authorization: `Bearer ${appToken}`,
+  });
+  if (!customerBefore.ok) {
+    console.error("GET /api/me/customer failed:", customerBefore.status);
+    process.exit(1);
+  }
+  console.log("Protected OK (/api/me/customer):\n", JSON.stringify(customerBefore.json, null, 2));
+  if (customerBefore.json?.data?.points != null) {
+    console.log("Points BEFORE:", customerBefore.json.data.points);
+  }
+
+  // 5) POST behavior/events (PURCHASE – adds points)
+  console.log("\n5) POST /api/behavior/events (PURCHASE – adds points)");
+  const eventsPayload = {
+    customer_id: String(CUSTOMER_ID).trim(),
+    event_type: "PURCHASE",
+    brand_id: String(BRAND_ID).trim(),
+    order: {
+      purchase_id: `demo-add-${Date.now()}`,
+      value: PURCHASE_AMOUNT,
+      products: [
+        { sku: "demo-product-1", quantity: 2, amount: PURCHASE_AMOUNT, value: PURCHASE_AMOUNT },
+      ],
+      payment_method: "OTHER",
+    },
+  };
+  const events = await requestJson("POST", "/api/behavior/events", eventsPayload, {
+    Authorization: `Bearer ${appToken}`,
+  });
+  if (!events.ok) {
+    console.error("Behavior events failed:", events.status, events.json || events.text);
+    process.exit(1);
+  }
+  console.log("Behavior events OK:\n", JSON.stringify(events.json, null, 2));
+
+  // 6) GET /api/me/customer (balance after)
+  console.log("\n6) GET /api/me/customer (balance after purchase)");
+  const customerAfter = await requestJson("GET", "/api/me/customer", null, {
+    Authorization: `Bearer ${appToken}`,
+  });
+  if (customerAfter.ok && customerAfter.json?.data?.points != null) {
+    console.log("Points AFTER:", customerAfter.json.data.points);
+    if (customerBefore.ok && customerBefore.json?.data?.points != null) {
+      const diff = customerAfter.json.data.points - customerBefore.json.data.points;
+      console.log("Points added:", diff);
+    }
+  }
+})();
